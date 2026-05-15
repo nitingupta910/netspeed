@@ -1,6 +1,6 @@
 [package]
 name = "netspeed-ng"
-version = "0.1.7"
+version = "1.0.0"
 edition = "2024"
 description = "Network speed testing and monitoring with a TUI"
 license = "Apache-2.0"
