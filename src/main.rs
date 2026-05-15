@@ -20,6 +20,8 @@ mod ui;
 #[cfg(test)]
 mod app_tests;
 #[cfg(test)]
+mod main_tests;
+#[cfg(test)]
 mod network_tests;
 #[cfg(test)]
 mod speedtest_tests;
@@ -42,7 +44,7 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     output: OutputFormat,
 
-    /// Print speed test progress to stderr in CLI mode
+    /// Print detailed speed test progress to stderr in CLI mode
     #[arg(long)]
     progress: bool,
 
@@ -54,6 +56,13 @@ struct Cli {
 enum OutputFormat {
     Text,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CliProgress {
+    Quiet,
+    Basic,
+    Detailed,
 }
 
 enum Msg {
@@ -78,8 +87,8 @@ async fn main() -> Result<()> {
     };
 
     if !cli.tui || cli.speed_test_once {
-        return run_cli_speed_test(interface, cli.output, cli.progress || cli.speed_test_once)
-            .await;
+        let progress = cli_progress_mode(cli.output, cli.progress || cli.speed_test_once);
+        return run_cli_speed_test(interface, cli.output, progress).await;
     }
 
     let available = network::list_interfaces()?;
@@ -109,7 +118,7 @@ async fn main() -> Result<()> {
 async fn run_cli_speed_test(
     interface: String,
     output: OutputFormat,
-    show_progress: bool,
+    progress_mode: CliProgress,
 ) -> Result<()> {
     let status = network::get_interface_status(&interface)?;
     if !status.is_usable() {
@@ -120,20 +129,18 @@ async fn run_cli_speed_test(
         );
     }
 
+    print_cli_progress_start(&interface, progress_mode);
+
     let (tx, mut rx) = mpsc::channel(32);
     tokio::spawn(run_speed_test(tx, interface.clone()));
 
     while let Some(progress) = rx.recv().await {
         match progress {
             SpeedTestProgress::Downloading(mbps) => {
-                if show_progress {
-                    eprintln!("download_mbps={mbps:.2}");
-                }
+                print_cli_progress_download(mbps, progress_mode);
             }
             SpeedTestProgress::Uploading(mbps) => {
-                if show_progress {
-                    eprintln!("upload_mbps={mbps:.2}");
-                }
+                print_cli_progress_upload(mbps, progress_mode);
             }
             SpeedTestProgress::Done(result) => {
                 print_cli_result(&interface, output, &result);
@@ -144,6 +151,43 @@ async fn run_cli_speed_test(
     }
 
     bail!("speed test ended without a result")
+}
+
+fn cli_progress_mode(output: OutputFormat, requested: bool) -> CliProgress {
+    if requested {
+        return CliProgress::Detailed;
+    }
+
+    match output {
+        OutputFormat::Text => CliProgress::Basic,
+        OutputFormat::Json => CliProgress::Quiet,
+    }
+}
+
+fn print_cli_progress_start(interface: &str, mode: CliProgress) {
+    match mode {
+        CliProgress::Quiet => {}
+        CliProgress::Basic => eprintln!("Testing network speed on {interface}..."),
+        CliProgress::Detailed => eprintln!("testing_interface={interface}"),
+    }
+}
+
+fn print_cli_progress_download(mbps: f64, mode: CliProgress) {
+    match mode {
+        CliProgress::Quiet => {}
+        CliProgress::Basic if mbps < 0.001 => eprintln!("Testing download..."),
+        CliProgress::Basic => {}
+        CliProgress::Detailed => eprintln!("download_mbps={mbps:.2}"),
+    }
+}
+
+fn print_cli_progress_upload(mbps: f64, mode: CliProgress) {
+    match mode {
+        CliProgress::Quiet => {}
+        CliProgress::Basic if mbps < 0.001 => eprintln!("Testing upload..."),
+        CliProgress::Basic => {}
+        CliProgress::Detailed => eprintln!("upload_mbps={mbps:.2}"),
+    }
 }
 
 fn print_cli_result(interface: &str, output: OutputFormat, result: &speedtest::SpeedTestResult) {

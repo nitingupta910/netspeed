@@ -7,6 +7,7 @@ A network speed test and real-time terminal monitor, written in Rust.
 ## Features
 
 - **Script-friendly CLI mode** — by default runs one speed test and prints parseable output
+- **Visible CLI progress** — text mode reports the active test phase on stderr so a run does not look stuck
 - **Live throughput TUI** — reads `/proc/net/dev` every second; shows download and upload speeds, totals, and per-session peaks
 - **Sparklines & chart** — 60-second scrolling history rendered with Braille-resolution line charts
 - **Speed test** — test against Cloudflare's speed endpoint; runs for 10 seconds in both directions for a stable reading
@@ -42,7 +43,7 @@ netspeed --interface wlan0
 # JSON output for scripts
 netspeed --output json
 
-# Show progress on stderr while keeping the final result on stdout
+# Show detailed progress on stderr while keeping the final result on stdout
 netspeed --progress
 
 # Launch the interactive TUI
@@ -50,13 +51,19 @@ netspeed --tui
 netspeed --tui --interface wlan0
 ```
 
-Text output is a single line:
+Text mode shows basic progress on stderr, then prints the final result as a single line on stdout:
+
+```text
+Testing network speed on eth0...
+Testing download...
+Testing upload...
+```
 
 ```text
 interface=eth0 download_mbps=713.88 upload_mbps=14.06
 ```
 
-JSON output:
+JSON output stays quiet by default for scripts:
 
 ```json
 {"interface":"eth0","download_mbps":713.88,"upload_mbps":14.06}
