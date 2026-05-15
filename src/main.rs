@@ -1,12 +1,15 @@
-use anyhow::{bail, Result};
-use clap::Parser;
+use anyhow::{Result, bail};
+use clap::{Parser, ValueEnum};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::{io, time::{Duration, Instant}};
+use ratatui::{Terminal, backend::CrosstermBackend};
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 use tokio::sync::mpsc;
 
 mod app;
@@ -22,22 +25,45 @@ mod network_tests;
 mod speedtest_tests;
 
 use app::{App, AppState};
-use speedtest::{run_speed_test, SpeedTestProgress};
+use speedtest::{SpeedTestProgress, run_speed_test};
 
 #[derive(Parser)]
-#[command(name = "netspeed", about = "Real-time network speed monitor with TUI")]
+#[command(name = "netspeed", about = "Network speed test and monitor")]
 struct Cli {
     /// Network interface to monitor (default: auto-detected from routing table)
     #[arg(short, long, value_name = "IFACE")]
     interface: Option<String>,
 
+    /// Launch the interactive terminal UI instead of running one CLI speed test
+    #[arg(long)]
+    tui: bool,
+
+    /// Output format for CLI mode
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    output: OutputFormat,
+
+    /// Print speed test progress to stderr in CLI mode
+    #[arg(long)]
+    progress: bool,
+
     #[arg(long, hide = true)]
     speed_test_once: bool,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum OutputFormat {
+    Text,
+    Json,
+}
+
 enum Msg {
     Key(event::KeyEvent),
-    Stats { download: f64, upload: f64, rx_delta: u64, tx_delta: u64 },
+    Stats {
+        download: f64,
+        upload: f64,
+        rx_delta: u64,
+        tx_delta: u64,
+    },
     InterfaceStatus(network::InterfaceStatus),
     SpeedTest(SpeedTestProgress),
 }
@@ -46,26 +72,16 @@ enum Msg {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    if cli.speed_test_once {
-        let interface = match cli.interface {
-            Some(i) => i,
-            None => network::get_default_interface()?,
-        };
-        let status = network::get_interface_status(&interface)?;
-        if !status.is_usable() {
-            bail!(
-                "interface '{}' {}; speed test not started",
-                interface,
-                status.description()
-            );
-        }
-        return run_speed_test_once(interface).await;
-    }
-
     let interface = match cli.interface {
         Some(i) => i,
         None => network::get_default_interface()?,
     };
+
+    if !cli.tui || cli.speed_test_once {
+        return run_cli_speed_test(interface, cli.output, cli.progress || cli.speed_test_once)
+            .await;
+    }
+
     let available = network::list_interfaces()?;
 
     enable_raw_mode()?;
@@ -77,7 +93,11 @@ async fn main() -> Result<()> {
     let result = run_app(&mut terminal, interface, available).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     if let Err(ref e) = result {
@@ -86,24 +106,37 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn run_speed_test_once(interface: String) -> Result<()> {
+async fn run_cli_speed_test(
+    interface: String,
+    output: OutputFormat,
+    show_progress: bool,
+) -> Result<()> {
+    let status = network::get_interface_status(&interface)?;
+    if !status.is_usable() {
+        bail!(
+            "interface '{}' {}; speed test not started",
+            interface,
+            status.description()
+        );
+    }
+
     let (tx, mut rx) = mpsc::channel(32);
-    tokio::spawn(run_speed_test(tx, interface));
+    tokio::spawn(run_speed_test(tx, interface.clone()));
 
     while let Some(progress) = rx.recv().await {
         match progress {
             SpeedTestProgress::Downloading(mbps) => {
-                println!("download {}", network::format_speed(mbps));
+                if show_progress {
+                    eprintln!("download_mbps={mbps:.2}");
+                }
             }
             SpeedTestProgress::Uploading(mbps) => {
-                println!("upload {}", network::format_speed(mbps));
+                if show_progress {
+                    eprintln!("upload_mbps={mbps:.2}");
+                }
             }
             SpeedTestProgress::Done(result) => {
-                println!(
-                    "done download={} upload={}",
-                    network::format_speed(result.download_mbps),
-                    network::format_speed(result.upload_mbps)
-                );
+                print_cli_result(&interface, output, &result);
                 return Ok(());
             }
             SpeedTestProgress::Error(error) => bail!(error),
@@ -111,6 +144,35 @@ async fn run_speed_test_once(interface: String) -> Result<()> {
     }
 
     bail!("speed test ended without a result")
+}
+
+fn print_cli_result(interface: &str, output: OutputFormat, result: &speedtest::SpeedTestResult) {
+    match output {
+        OutputFormat::Text => println!(
+            "interface={} download_mbps={:.2} upload_mbps={:.2}",
+            interface, result.download_mbps, result.upload_mbps
+        ),
+        OutputFormat::Json => println!(
+            "{{\"interface\":\"{}\",\"download_mbps\":{:.2},\"upload_mbps\":{:.2}}}",
+            json_escape(interface),
+            result.download_mbps,
+            result.upload_mbps
+        ),
+    }
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|c| match c {
+            '"' => "\\\"".chars().collect::<Vec<_>>(),
+            '\\' => "\\\\".chars().collect(),
+            '\n' => "\\n".chars().collect(),
+            '\r' => "\\r".chars().collect(),
+            '\t' => "\\t".chars().collect(),
+            c => vec![c],
+        })
+        .collect()
 }
 
 async fn run_app(
@@ -183,7 +245,12 @@ async fn process(
     match msg {
         Msg::Key(key) => return handle_key(app, key, tx, stats_handle).await,
 
-        Msg::Stats { download, upload, rx_delta, tx_delta } => {
+        Msg::Stats {
+            download,
+            upload,
+            rx_delta,
+            tx_delta,
+        } => {
             app.push_speeds(download, upload);
             app.total_rx += rx_delta;
             app.total_tx += tx_delta;
@@ -212,7 +279,9 @@ async fn handle_key(
         Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
 
         // Speed test
-        Char('s') | Char('S') if !app.interface_selector_open && app.state != AppState::SpeedTesting => {
+        Char('s') | Char('S')
+            if !app.interface_selector_open && app.state != AppState::SpeedTesting =>
+        {
             if !app.interface_status.is_usable() {
                 app.speed_test_progress = Some(format!(
                     "Error: interface '{}' {}; speed test not started",
@@ -335,7 +404,16 @@ async fn stats_task(tx: mpsc::Sender<Msg>, interface: String) {
                     let download = (rx_delta as f64 * 8.0) / (elapsed * 1_000_000.0);
                     let upload = (tx_delta as f64 * 8.0) / (elapsed * 1_000_000.0);
 
-                    if tx.send(Msg::Stats { download, upload, rx_delta, tx_delta }).await.is_err() {
+                    if tx
+                        .send(Msg::Stats {
+                            download,
+                            upload,
+                            rx_delta,
+                            tx_delta,
+                        })
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }

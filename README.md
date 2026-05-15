@@ -1,14 +1,15 @@
 # netspeed
 
-A real-time network speed monitor with a terminal UI, written in Rust.
+A network speed test and real-time terminal monitor, written in Rust.
 
 ![TUI screenshot placeholder](https://raw.githubusercontent.com/nitingupta910/netspeed/main/assets/screenshot.png)
 
 ## Features
 
-- **Live throughput** — reads `/proc/net/dev` every second; shows download and upload speeds, totals, and per-session peaks
+- **Script-friendly CLI mode** — by default runs one speed test and prints parseable output
+- **Live throughput TUI** — reads `/proc/net/dev` every second; shows download and upload speeds, totals, and per-session peaks
 - **Sparklines & chart** — 60-second scrolling history rendered with Braille-resolution line charts
-- **Speed test** — one-key test against Cloudflare's speed endpoint; runs for 10 seconds in both directions for a stable reading
+- **Speed test** — test against Cloudflare's speed endpoint; runs for 10 seconds in both directions for a stable reading
 - **Interface picker** — pop-up selector to switch between network interfaces without restarting
 - **Auto-detect** — with no arguments, finds the default-route interface from `/proc/net/route`
 
@@ -31,15 +32,37 @@ cargo install --path .
 ## Usage
 
 ```
-# Auto-detect the default interface
+# Run one speed test on the default interface
 netspeed
 
-# Monitor a specific interface
+# Run one speed test on a specific interface
 netspeed -i eth0
 netspeed --interface wlan0
+
+# JSON output for scripts
+netspeed --output json
+
+# Show progress on stderr while keeping the final result on stdout
+netspeed --progress
+
+# Launch the interactive TUI
+netspeed --tui
+netspeed --tui --interface wlan0
 ```
 
-### Key bindings
+Text output is a single line:
+
+```text
+interface=eth0 download_mbps=713.88 upload_mbps=14.06
+```
+
+JSON output:
+
+```json
+{"interface":"eth0","download_mbps":713.88,"upload_mbps":14.06}
+```
+
+### TUI key bindings
 
 | Key | Action |
 |-----|--------|
