@@ -1,5 +1,6 @@
 use crate::speedtest::{
-    DOWNLOAD_BYTES_PER_REQUEST, SpeedTestProgress, SpeedTestResult, bytes_to_mbps, download_url,
+    DOWNLOAD_TRANSFER_SIZES, MIN_TRANSFER_BYTES, SpeedTestProgress, SpeedTestResult,
+    UPLOAD_TRANSFER_SIZES, bytes_to_mbps, cloudflare_status_error, download_url,
 };
 
 // ── bytes_to_mbps ─────────────────────────────────────────────────────────────
@@ -44,12 +45,48 @@ fn bytes_to_mbps_zero_bytes_gives_zero() {
 // ── download_url ─────────────────────────────────────────────────────────────
 
 #[test]
-fn download_url_uses_cloudflare_accepted_payload_size() {
-    assert_eq!(DOWNLOAD_BYTES_PER_REQUEST, 50_000_000);
+fn download_url_uses_requested_payload_size() {
     assert_eq!(
-        download_url(),
-        "https://speed.cloudflare.com/__down?bytes=50000000"
+        download_url(MIN_TRANSFER_BYTES),
+        "https://speed.cloudflare.com/__down?bytes=1000000"
     );
+}
+
+#[test]
+fn download_transfer_sizes_start_small_and_stop_before_cloudflare_limit() {
+    assert_eq!(DOWNLOAD_TRANSFER_SIZES[0], MIN_TRANSFER_BYTES);
+    assert_eq!(
+        DOWNLOAD_TRANSFER_SIZES[DOWNLOAD_TRANSFER_SIZES.len() - 1],
+        5_000_000
+    );
+}
+
+#[test]
+fn upload_transfer_sizes_start_small_and_ramp_up() {
+    assert_eq!(UPLOAD_TRANSFER_SIZES[0], MIN_TRANSFER_BYTES);
+    assert_eq!(
+        UPLOAD_TRANSFER_SIZES[UPLOAD_TRANSFER_SIZES.len() - 1],
+        10_000_000
+    );
+}
+
+#[test]
+fn cloudflare_rate_limit_error_is_explicit() {
+    let msg = cloudflare_status_error(
+        "download",
+        reqwest::StatusCode::TOO_MANY_REQUESTS,
+        Some("60"),
+    );
+    assert!(msg.contains("rate limit"));
+    assert!(msg.contains("HTTP 429"));
+    assert!(msg.contains("60"));
+}
+
+#[test]
+fn cloudflare_status_error_names_direction() {
+    let msg = cloudflare_status_error("upload", reqwest::StatusCode::BAD_REQUEST, None);
+    assert!(msg.contains("upload"));
+    assert!(msg.contains("HTTP 400"));
 }
 
 // ── SpeedTestResult ───────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Axis, Block, Borders, Chart, Clear, Dataset, GraphType, List, ListItem, Paragraph,
-        Sparkline,
+        Sparkline, Wrap,
     },
     Frame,
 };
@@ -252,12 +252,36 @@ fn render_speedtest_panel(f: &mut Frame, app: &App, area: Rect) {
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)])
+        .constraints([Constraint::Length(2), Constraint::Length(1), Constraint::Min(0)])
         .split(inner);
 
     match &app.state {
         AppState::Monitoring => {
-            if let Some(result) = &app.speed_test_result {
+            if let Some(error) = app
+                .speed_test_progress
+                .as_deref()
+                .filter(|text| text.starts_with("Error:"))
+            {
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        error,
+                        Style::default()
+                            .fg(Color::Red)
+                            .add_modifier(Modifier::BOLD),
+                    )))
+                    .wrap(Wrap { trim: true })
+                    .alignment(Alignment::Center),
+                    rows[0],
+                );
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        "Press [s] to try again",
+                        Style::default().fg(Color::DarkGray),
+                    )))
+                    .alignment(Alignment::Center),
+                    rows[1],
+                );
+            } else if let Some(result) = &app.speed_test_result {
                 f.render_widget(
                     Paragraph::new(Line::from(vec![
                         Span::styled("↓ ", Style::default().fg(Color::Cyan)),

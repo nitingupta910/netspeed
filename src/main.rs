@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -30,6 +30,9 @@ struct Cli {
     /// Network interface to monitor (default: auto-detected from routing table)
     #[arg(short, long, value_name = "IFACE")]
     interface: Option<String>,
+
+    #[arg(long, hide = true)]
+    speed_test_once: bool,
 }
 
 enum Msg {
@@ -41,6 +44,10 @@ enum Msg {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if cli.speed_test_once {
+        return run_speed_test_once().await;
+    }
 
     let interface = match cli.interface {
         Some(i) => i,
@@ -64,6 +71,33 @@ async fn main() -> Result<()> {
         eprintln!("Error: {e}");
     }
     result
+}
+
+async fn run_speed_test_once() -> Result<()> {
+    let (tx, mut rx) = mpsc::channel(32);
+    tokio::spawn(run_speed_test(tx));
+
+    while let Some(progress) = rx.recv().await {
+        match progress {
+            SpeedTestProgress::Downloading(mbps) => {
+                println!("download {}", network::format_speed(mbps));
+            }
+            SpeedTestProgress::Uploading(mbps) => {
+                println!("upload {}", network::format_speed(mbps));
+            }
+            SpeedTestProgress::Done(result) => {
+                println!(
+                    "done download={} upload={}",
+                    network::format_speed(result.download_mbps),
+                    network::format_speed(result.upload_mbps)
+                );
+                return Ok(());
+            }
+            SpeedTestProgress::Error(error) => bail!(error),
+        }
+    }
+
+    bail!("speed test ended without a result")
 }
 
 async fn run_app(
