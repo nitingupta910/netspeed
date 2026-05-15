@@ -17,7 +17,7 @@ A real-time network speed monitor with a terminal UI, written in Rust.
 ### From crates.io
 
 ```bash
-cargo install netspeed
+cargo install netspeed-ng
 ```
 
 ### From source

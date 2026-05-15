@@ -1,5 +1,5 @@
 [package]
-name = "netspeed"
+name = "netspeed-ng"
 version = "0.1.2"
 edition = "2024"
 description = "A real-time network speed monitor with a terminal UI"
