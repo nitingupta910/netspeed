@@ -1,8 +1,8 @@
 [package]
 name = "netspeed-ng"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
-description = "A real-time network speed monitor with a terminal UI"
+description = "Network speed testing and monitoring with a TUI"
 license = "Apache-2.0"
 repository = "https://github.com/nitingupta910/netspeed"
 readme = "README.md"
