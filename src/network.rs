@@ -1,6 +1,38 @@
 use anyhow::{Context, Result};
 use std::fs;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterfaceStatus {
+    Up,
+    NoCarrier,
+    Down,
+    Unknown(String),
+}
+
+impl InterfaceStatus {
+    pub fn is_usable(&self) -> bool {
+        matches!(self, Self::Up)
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Up => "up",
+            Self::NoCarrier => "no carrier",
+            Self::Down => "down",
+            Self::Unknown(_) => "unknown",
+        }
+    }
+
+    pub fn description(&self) -> &str {
+        match self {
+            Self::Up => "is up",
+            Self::NoCarrier => "has no carrier",
+            Self::Down => "is down",
+            Self::Unknown(_) => "status is unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct InterfaceStats {
     pub name: String,
@@ -28,6 +60,14 @@ pub fn get_interface_stats(interface: &str) -> Result<InterfaceStats> {
     parse_dev()?.into_iter()
         .find(|s| s.name == interface)
         .ok_or_else(|| anyhow::anyhow!("Interface '{}' not found in /proc/net/dev", interface))
+}
+
+pub fn get_interface_status(interface: &str) -> Result<InterfaceStatus> {
+    let operstate = fs::read_to_string(format!("/sys/class/net/{interface}/operstate"))
+        .with_context(|| format!("Failed to read operstate for interface '{interface}'"))?;
+
+    let carrier = fs::read_to_string(format!("/sys/class/net/{interface}/carrier")).ok();
+    Ok(interface_status_from_sys(&operstate, carrier.as_deref()))
 }
 
 pub fn list_interfaces() -> Result<Vec<String>> {
@@ -80,6 +120,21 @@ pub(crate) fn default_iface_from_route(content: &str) -> Option<String> {
         }
     }
     None
+}
+
+pub(crate) fn interface_status_from_sys(
+    operstate: &str,
+    carrier: Option<&str>,
+) -> InterfaceStatus {
+    if carrier.map(str::trim) == Some("0") {
+        return InterfaceStatus::NoCarrier;
+    }
+
+    match operstate.trim() {
+        "up" => InterfaceStatus::Up,
+        "down" => InterfaceStatus::Down,
+        other => InterfaceStatus::Unknown(other.to_string()),
+    }
 }
 
 pub fn format_speed(mbps: f64) -> String {

@@ -46,6 +46,11 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         AppState::SpeedTesting => ("◎ Testing…", Color::Yellow),
         AppState::SpeedTestDone => ("✓ Test Done", Color::Cyan),
     };
+    let iface_status_color = if app.interface_status.is_usable() {
+        Color::Green
+    } else {
+        Color::Red
+    };
 
     let line = Line::from(vec![
         Span::styled(" netspeed ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
@@ -55,6 +60,12 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
             &app.interface,
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         ),
+        Span::styled(" (", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            app.interface_status.label(),
+            Style::default().fg(iface_status_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(")", Style::default().fg(Color::DarkGray)),
         Span::styled("  │  ", Style::default().fg(Color::DarkGray)),
         Span::styled(status_text, Style::default().fg(status_color)),
         Span::raw(" "),
@@ -257,7 +268,31 @@ fn render_speedtest_panel(f: &mut Frame, app: &App, area: Rect) {
 
     match &app.state {
         AppState::Monitoring => {
-            if let Some(error) = app
+            if !app.interface_status.is_usable() {
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        format!(
+                            "Interface '{}' {}",
+                            app.interface,
+                            app.interface_status.description()
+                        ),
+                        Style::default()
+                            .fg(Color::Red)
+                            .add_modifier(Modifier::BOLD),
+                    )))
+                    .wrap(Wrap { trim: true })
+                    .alignment(Alignment::Center),
+                    rows[0],
+                );
+                f.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        "Select an active interface before running a speed test",
+                        Style::default().fg(Color::DarkGray),
+                    )))
+                    .alignment(Alignment::Center),
+                    rows[1],
+                );
+            } else if let Some(error) = app
                 .speed_test_progress
                 .as_deref()
                 .filter(|text| text.starts_with("Error:"))

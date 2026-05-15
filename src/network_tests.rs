@@ -1,5 +1,6 @@
 use crate::network::{
-    default_iface_from_route, format_bytes, format_speed, parse_dev_str,
+    InterfaceStatus, default_iface_from_route, format_bytes, format_speed,
+    interface_status_from_sys, parse_dev_str,
 };
 
 // ── format_speed ─────────────────────────────────────────────────────────────
@@ -170,4 +171,35 @@ fn route_returns_first_default_when_multiple_exist() {
 fn route_empty_content_returns_none() {
     assert_eq!(default_iface_from_route(""), None);
     assert_eq!(default_iface_from_route("Iface\tDestination\n"), None);
+}
+
+// ── interface_status_from_sys ────────────────────────────────────────────────
+
+#[test]
+fn interface_status_up_when_operstate_up_and_carrier_one() {
+    assert_eq!(
+        interface_status_from_sys("up\n", Some("1\n")),
+        InterfaceStatus::Up
+    );
+}
+
+#[test]
+fn interface_status_no_carrier_takes_precedence() {
+    assert_eq!(
+        interface_status_from_sys("down\n", Some("0\n")),
+        InterfaceStatus::NoCarrier
+    );
+}
+
+#[test]
+fn interface_status_down_when_operstate_down_without_carrier() {
+    assert_eq!(interface_status_from_sys("down\n", None), InterfaceStatus::Down);
+}
+
+#[test]
+fn interface_status_preserves_unknown_operstate() {
+    assert_eq!(
+        interface_status_from_sys("dormant\n", Some("1\n")),
+        InterfaceStatus::Unknown("dormant".to_string())
+    );
 }

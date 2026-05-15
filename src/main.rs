@@ -38,6 +38,7 @@ struct Cli {
 enum Msg {
     Key(event::KeyEvent),
     Stats { download: f64, upload: f64, rx_delta: u64, tx_delta: u64 },
+    InterfaceStatus(network::InterfaceStatus),
     SpeedTest(SpeedTestProgress),
 }
 
@@ -46,7 +47,19 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.speed_test_once {
-        return run_speed_test_once().await;
+        let interface = match cli.interface {
+            Some(i) => i,
+            None => network::get_default_interface()?,
+        };
+        let status = network::get_interface_status(&interface)?;
+        if !status.is_usable() {
+            bail!(
+                "interface '{}' {}; speed test not started",
+                interface,
+                status.description()
+            );
+        }
+        return run_speed_test_once(interface).await;
     }
 
     let interface = match cli.interface {
@@ -73,9 +86,9 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn run_speed_test_once() -> Result<()> {
+async fn run_speed_test_once(interface: String) -> Result<()> {
     let (tx, mut rx) = mpsc::channel(32);
-    tokio::spawn(run_speed_test(tx));
+    tokio::spawn(run_speed_test(tx, interface));
 
     while let Some(progress) = rx.recv().await {
         match progress {
@@ -106,6 +119,8 @@ async fn run_app(
     available: Vec<String>,
 ) -> Result<()> {
     let mut app = App::new(interface.clone(), available);
+    app.interface_status = network::get_interface_status(&interface)
+        .unwrap_or_else(|e| network::InterfaceStatus::Unknown(e.to_string()));
     let (tx, mut rx) = mpsc::channel::<Msg>(64);
 
     // Dedicated OS thread for blocking crossterm key events
@@ -174,6 +189,10 @@ async fn process(
             app.total_tx += tx_delta;
         }
 
+        Msg::InterfaceStatus(status) => {
+            app.interface_status = status;
+        }
+
         Msg::SpeedTest(progress) => handle_speedtest(app, progress),
     }
     false
@@ -194,12 +213,23 @@ async fn handle_key(
 
         // Speed test
         Char('s') | Char('S') if !app.interface_selector_open && app.state != AppState::SpeedTesting => {
+            if !app.interface_status.is_usable() {
+                app.speed_test_progress = Some(format!(
+                    "Error: interface '{}' {}; speed test not started",
+                    app.interface,
+                    app.interface_status.description()
+                ));
+                app.state = AppState::Monitoring;
+                return false;
+            }
+
             app.state = AppState::SpeedTesting;
             app.speed_test_progress = Some("Connecting…".to_string());
+            let interface = app.interface.clone();
             let st_tx = tx.clone();
             tokio::spawn(async move {
                 let (ptx, mut prx) = mpsc::channel(32);
-                tokio::spawn(run_speed_test(ptx));
+                tokio::spawn(run_speed_test(ptx, interface));
                 while let Some(p) = prx.recv().await {
                     if st_tx.send(Msg::SpeedTest(p)).await.is_err() {
                         break;
@@ -233,6 +263,8 @@ async fn handle_key(
             if new_iface != app.interface {
                 app.interface = new_iface.clone();
                 app.reset_for_interface();
+                app.interface_status = network::get_interface_status(&new_iface)
+                    .unwrap_or_else(|e| network::InterfaceStatus::Unknown(e.to_string()));
                 stats_handle.abort();
                 *stats_handle = tokio::spawn(stats_task(tx.clone(), new_iface));
             }
@@ -284,6 +316,12 @@ async fn stats_task(tx: mpsc::Sender<Msg>, interface: String) {
 
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
+
+        if let Ok(status) = network::get_interface_status(&interface) {
+            if tx.send(Msg::InterfaceStatus(status)).await.is_err() {
+                break;
+            }
+        }
 
         let now = Instant::now();
         let elapsed = now.duration_since(prev_time).as_secs_f64();

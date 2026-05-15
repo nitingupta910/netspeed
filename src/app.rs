@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use crate::network::InterfaceStatus;
 use crate::speedtest::SpeedTestResult;
 
 pub const HISTORY_SIZE: usize = 60;
@@ -21,6 +22,7 @@ pub struct App {
     pub upload_history: VecDeque<f64>,
     pub total_rx: u64,
     pub total_tx: u64,
+    pub interface_status: InterfaceStatus,
     pub state: AppState,
     pub speed_test_result: Option<SpeedTestResult>,
     pub speed_test_progress: Option<String>,
@@ -45,6 +47,7 @@ impl App {
             upload_history: VecDeque::with_capacity(HISTORY_SIZE),
             total_rx: 0,
             total_tx: 0,
+            interface_status: InterfaceStatus::Unknown("checking".to_string()),
             state: AppState::Monitoring,
             speed_test_result: None,
             speed_test_progress: None,

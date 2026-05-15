@@ -51,15 +51,19 @@ pub(crate) fn cloudflare_status_error(
     format!("Cloudflare {direction} speed test failed with HTTP {status}")
 }
 
-pub async fn run_speed_test(tx: mpsc::Sender<SpeedTestProgress>) {
-    if let Err(e) = do_test(&tx).await {
-        let _ = tx.send(SpeedTestProgress::Error(e.to_string())).await;
+pub async fn run_speed_test(tx: mpsc::Sender<SpeedTestProgress>, interface: String) {
+    if let Err(e) = do_test(&tx, interface.clone()).await {
+        let _ = tx
+            .send(SpeedTestProgress::Error(format!(
+                "speed test failed on interface '{interface}': {e:#}"
+            )))
+            .await;
     }
 }
 
-async fn do_test(tx: &mpsc::Sender<SpeedTestProgress>) -> Result<()> {
-    let download_mbps = test_download(tx).await?;
-    let upload_mbps = test_upload(tx).await?;
+async fn do_test(tx: &mpsc::Sender<SpeedTestProgress>, interface: String) -> Result<()> {
+    let download_mbps = test_download(tx, interface.clone()).await?;
+    let upload_mbps = test_upload(tx, interface).await?;
     let _ = tx
         .send(SpeedTestProgress::Done(SpeedTestResult {
             download_mbps,
@@ -85,7 +89,7 @@ pub(crate) fn bytes_to_mbps(bytes: u64, elapsed_secs: f64) -> f64 {
 // The AtomicU64 counter is shared between the blocking thread and an async
 // progress reporter that fires every 300 ms on the tokio executor.
 
-async fn test_download(tx: &mpsc::Sender<SpeedTestProgress>) -> Result<f64> {
+async fn test_download(tx: &mpsc::Sender<SpeedTestProgress>, interface: String) -> Result<f64> {
     let _ = tx.send(SpeedTestProgress::Downloading(0.0)).await;
 
     let bytes_recvd = Arc::new(AtomicU64::new(0));
@@ -114,8 +118,9 @@ async fn test_download(tx: &mpsc::Sender<SpeedTestProgress>) -> Result<f64> {
     let mut handles = Vec::with_capacity(DOWNLOAD_CONCURRENCY);
     for _ in 0..DOWNLOAD_CONCURRENCY {
         let counter = bytes_recvd.clone();
+        let interface = interface.clone();
         handles.push(tokio::task::spawn_blocking(move || {
-            run_download_worker(start, counter)
+            run_download_worker(start, counter, interface)
         }));
     }
 
@@ -142,10 +147,12 @@ async fn test_download(tx: &mpsc::Sender<SpeedTestProgress>) -> Result<f64> {
     Ok(bytes_to_mbps(total, elapsed))
 }
 
-fn run_download_worker(start: Instant, counter: Arc<AtomicU64>) -> Result<()> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(90))
-        .build()?;
+fn run_download_worker(
+    start: Instant,
+    counter: Arc<AtomicU64>,
+    interface: String,
+) -> Result<()> {
+    let client = blocking_client(&interface)?;
 
     let mut buf = vec![0u8; 256 * 1024];
     let mut size_idx = DOWNLOAD_TRANSFER_SIZES.len() - 1;
@@ -155,7 +162,9 @@ fn run_download_worker(start: Instant, counter: Arc<AtomicU64>) -> Result<()> {
         let mut resp = client
             .get(download_url(request_bytes))
             .send()
-            .with_context(|| format!("download request failed for {request_bytes} bytes"))?;
+            .with_context(|| {
+                format!("download request failed for {request_bytes} bytes on interface '{interface}'")
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -218,7 +227,7 @@ impl Read for ZeroReader {
     }
 }
 
-async fn test_upload(tx: &mpsc::Sender<SpeedTestProgress>) -> Result<f64> {
+async fn test_upload(tx: &mpsc::Sender<SpeedTestProgress>, interface: String) -> Result<f64> {
     let _ = tx.send(SpeedTestProgress::Uploading(0.0)).await;
 
     let start = Instant::now();
@@ -247,8 +256,9 @@ async fn test_upload(tx: &mpsc::Sender<SpeedTestProgress>) -> Result<f64> {
     let mut handles = Vec::with_capacity(UPLOAD_CONCURRENCY);
     for _ in 0..UPLOAD_CONCURRENCY {
         let counter = bytes_sent.clone();
+        let interface = interface.clone();
         handles.push(tokio::task::spawn_blocking(move || {
-            run_upload_worker(start, counter)
+            run_upload_worker(start, counter, interface)
         }));
     }
 
@@ -277,10 +287,8 @@ async fn test_upload(tx: &mpsc::Sender<SpeedTestProgress>) -> Result<f64> {
     Ok(mbps)
 }
 
-fn run_upload_worker(start: Instant, counter: Arc<AtomicU64>) -> Result<()> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(90))
-        .build()?;
+fn run_upload_worker(start: Instant, counter: Arc<AtomicU64>, interface: String) -> Result<()> {
+    let client = blocking_client(&interface)?;
 
     let mut size_idx = UPLOAD_TRANSFER_SIZES.len() - 1;
 
@@ -294,7 +302,9 @@ fn run_upload_worker(start: Instant, counter: Arc<AtomicU64>) -> Result<()> {
             .post(CLOUDFLARE_UPLOAD_URL)
             .body(body)
             .send()
-            .with_context(|| format!("upload request failed for {request_bytes} bytes"))?;
+            .with_context(|| {
+                format!("upload request failed for {request_bytes} bytes on interface '{interface}'")
+            })?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -314,4 +324,13 @@ fn run_upload_worker(start: Instant, counter: Arc<AtomicU64>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn blocking_client(interface: &str) -> Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .connect_timeout(Duration::from_secs(5))
+        .interface(interface)
+        .build()
+        .with_context(|| format!("failed to bind speed test to interface '{interface}'"))
 }
